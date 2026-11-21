@@ -1,9 +1,10 @@
 ﻿using System.Globalization;
 using TradingScanner.Domain.Models;
+using TradingScanner.Domain.SwingDetection;
 using TradingScanner.Infrastructure.Bybit;
 using TradingScanner.Infrastructure.Services;
 
-const string symbol = "BTCUSDT";
+const string symbol = "EVAAUSDT";
 
 Console.WriteLine("================================================");
 Console.WriteLine("       BTCUSDT HISTORICAL CANDLE LOADER");
@@ -102,6 +103,41 @@ try
 
     Console.WriteLine();
     Console.WriteLine("STATUS: HISTORICAL DATA READY");
+
+    // Run swing point detection on the validated historical candles.
+
+    var options = new SwingPointDetectorOptions
+    {
+        Timeframe = "4H",
+        CandleInterval = TimeSpan.FromHours(4),
+        ConfirmationCandles = 2
+    };
+
+    var detector = new SwingPointDetector(options);
+
+    var swingResult = detector.Detect(history.Candles);
+
+    Console.WriteLine();
+    Console.WriteLine("================================================================");
+    Console.WriteLine("                      SWING DETECTION RESULTS");
+    Console.WriteLine("================================================================");
+
+    Console.WriteLine($"Processed candles: {swingResult.ProcessedCandles}");
+    Console.WriteLine($"Initialized: {swingResult.IsInitialized}");
+    Console.WriteLine($"Confirmed swing points: {swingResult.SwingPoints.Count}");
+
+    foreach (var swing in swingResult.SwingPoints)
+    {
+        Console.WriteLine();
+
+        Console.WriteLine($"Type: {swing.Type}");
+        Console.WriteLine($"Symbol: {swing.Symbol}");
+        Console.WriteLine($"Timeframe: {swing.Timeframe}");
+        Console.WriteLine($"Price: {swing.Price}");
+        Console.WriteLine($"Occurred: {swing.OccurredAt:yyyy-MM-dd HH:mm} UTC");
+        Console.WriteLine($"Confirmed: {swing.ConfirmedAt:yyyy-MM-dd HH:mm} UTC");
+    }
+
 }
 catch (HttpRequestException ex)
 {
