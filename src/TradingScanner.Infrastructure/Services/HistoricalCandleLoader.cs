@@ -1,14 +1,13 @@
-using TradingScanner.Domain.Entities;
+﻿using TradingScanner.Domain.Entities;
+using TradingScanner.Domain.MarketData;
 using TradingScanner.Domain.Models;
-using TradingScanner.Infrastructure.Bybit;
 
 namespace TradingScanner.Infrastructure.Services;
 
 public sealed class HistoricalCandleLoader
 {
-    private readonly BybitRestClient _bybitClient;
+    private readonly IMarketDataProvider _marketDataProvider;
     private readonly CandleValidator _validator;
-    private readonly TimeProvider _timeProvider;
 
     private static readonly TimeSpan CandleInterval =
         TimeSpan.FromHours(4);
@@ -16,29 +15,18 @@ public sealed class HistoricalCandleLoader
     private const int DefaultCandleCount = 84;
 
     public HistoricalCandleLoader(
-        BybitRestClient bybitClient,
-        CandleValidator validator,
-        TimeProvider timeProvider)
+        IMarketDataProvider marketDataProvider,
+        CandleValidator validator)
     {
-        _bybitClient = bybitClient;
+        _marketDataProvider = marketDataProvider;
         _validator = validator;
-        _timeProvider = timeProvider;
     }
 
     public async Task<CandleHistory> LoadLatestAsync(
         string symbol,
         CancellationToken cancellationToken = default)
     {
-        const int candleCount = DefaultCandleCount;
-
-        Console.WriteLine();
-        Console.WriteLine("Preparing historical candle window...");
-
-        // 1. Get current UTC time.
-
-        var now = _timeProvider.GetUtcNow();
-
-        // 2. Calculate the latest 4H candle boundary.
+        var now = TimeProvider.System.GetUtcNow();
 
         var intervalMilliseconds =
             (long)CandleInterval.TotalMilliseconds;
@@ -51,32 +39,26 @@ public sealed class HistoricalCandleLoader
             DateTimeOffset.FromUnixTimeMilliseconds(
                 currentCandleStartMilliseconds);
 
-        // 3. The previous candle is the latest fully closed candle.
-
         var latestClosedTime =
             currentCandleStart - CandleInterval;
-
-        // 4. Calculate the oldest candle in our 84-candle window.
 
         var oldestTime =
             latestClosedTime -
             TimeSpan.FromTicks(
-                CandleInterval.Ticks * (candleCount - 1));
+                CandleInterval.Ticks * (DefaultCandleCount - 1));
 
         Console.WriteLine($"Current UTC time: {now:O}");
         Console.WriteLine($"Oldest required:  {oldestTime:O}");
         Console.WriteLine($"Latest required:  {latestClosedTime:O}");
 
-        // 5. Retrieve the requested historical window.
-
-        var candles = await _bybitClient.GetCandlesAsync(
+        var request = MarketDataRequest.ForHistoricalWindow(
             symbol,
             oldestTime,
-            latestClosedTime,
-            limit: 1000,
-            cancellationToken);
+            latestClosedTime);
 
-        // 6. Keep only the expected time range.
+        var candles = await _marketDataProvider.GetCandlesAsync(
+            request,
+            cancellationToken);
 
         var normalizedCandles = candles
             .Where(c =>
@@ -85,12 +67,8 @@ public sealed class HistoricalCandleLoader
                 c.StartTime.Add(CandleInterval) <= now)
             .ToList();
 
-        // 7. Remove identical duplicates and sort chronologically.
-
         var uniqueCandles =
             _validator.RemoveDuplicates(normalizedCandles);
-
-        // 8. Validate each candle.
 
         foreach (var candle in uniqueCandles)
         {
@@ -106,25 +84,26 @@ public sealed class HistoricalCandleLoader
             _validator.ValidateCandle(candle);
         }
 
-        // 9. Find missing 4H intervals.
-
         var missingCandles = _validator.FindMissingCandles(
             uniqueCandles,
             oldestTime,
             latestClosedTime);
-
-        // 10. Attempt to recover missing candles.
 
         foreach (var missingTime in missingCandles)
         {
             Console.WriteLine(
                 $"Recovering missing candle: {missingTime:O}");
 
-            var recovered = await _bybitClient.GetCandlesAsync(
+            var recoveryStart = missingTime;
+            var recoveryEnd = missingTime.Add(CandleInterval);
+
+            var recoveryRequest = MarketDataRequest.ForHistoricalWindow(
                 symbol,
-                missingTime,
-                missingTime,
-                limit: 10,
+                recoveryStart,
+                recoveryEnd);
+
+            var recovered = await _marketDataProvider.GetCandlesAsync(
+                recoveryRequest,
                 cancellationToken);
 
             var matchingCandles = recovered
@@ -139,8 +118,6 @@ public sealed class HistoricalCandleLoader
             uniqueCandles = _validator.RemoveDuplicates(
                 uniqueCandles.Concat(matchingCandles));
         }
-
-        // 11. Recheck for missing candles.
 
         missingCandles = _validator.FindMissingCandles(
             uniqueCandles,
@@ -158,18 +135,13 @@ public sealed class HistoricalCandleLoader
                 missingTimes);
         }
 
-        // 12. Ensure exactly 84 consecutive candles exist.
-
         _validator.ValidateContinuity(
             uniqueCandles,
             oldestTime,
             latestClosedTime,
-            candleCount);
+            DefaultCandleCount);
 
-        Console.WriteLine(
-            "Historical candle validation successful.");
-
-        // 13. Return the validated history.
+        Console.WriteLine("Historical candle validation successful.");
 
         return new CandleHistory(
             Symbol: symbol,
@@ -177,7 +149,6 @@ public sealed class HistoricalCandleLoader
             LoadedAt: now,
             OldestCandleTime: oldestTime,
             LatestCandleTime: latestClosedTime,
-            Candles: uniqueCandles
-        );
+            Candles: uniqueCandles);
     }
 }

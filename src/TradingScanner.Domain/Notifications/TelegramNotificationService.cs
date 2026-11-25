@@ -20,12 +20,13 @@ public sealed class TelegramNotificationService
 
     public async Task SendTrendAlertAsync(
         TrendResult trend,
+        string dataProviderName,
         CancellationToken cancellationToken = default)
     {
         if (trend.Direction == TrendDirection.Neutral)
             return;
 
-        var message = BuildMessage(trend);
+        var message = BuildMessage(trend, dataProviderName);
 
         var request = new TelegramMessageRequest
         {
@@ -54,7 +55,7 @@ public sealed class TelegramNotificationService
         }
     }
 
-    private static string BuildMessage(TrendResult trend)
+    private static string BuildMessage(TrendResult trend, string dataProviderName)
     {
         var bullish = trend.Direction == TrendDirection.Bullish;
 
@@ -77,11 +78,11 @@ public sealed class TelegramNotificationService
             .Select(x => x.Price)
             .ToArray();
 
-        return $"""
+        return $$"""
         {title}
 
         Symbol: {trend.Symbol}
-        Exchange: Bybit
+        Exchange: {dataProviderName}
         Timeframe: {trend.Timeframe}
 
         Market Structure:

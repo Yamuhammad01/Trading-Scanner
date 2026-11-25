@@ -17,6 +17,7 @@ public sealed class TrendAlertCoordinator
 
     public async Task ProcessAsync(
         TrendResult trend,
+        string dataProviderName,
         CancellationToken cancellationToken = default)
     {
         if (trend.Direction == TrendDirection.Neutral)
@@ -39,6 +40,7 @@ public sealed class TrendAlertCoordinator
 
         await _telegram.SendTrendAlertAsync(
             trend,
+            dataProviderName,
             cancellationToken);
 
         await _deduplication.MarkAsSentAsync(

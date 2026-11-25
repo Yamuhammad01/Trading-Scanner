@@ -1,49 +1,53 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using TradingScanner.Domain.MarketData;
 using TradingScanner.Domain.MarketStructure;
 using TradingScanner.Domain.MarketStructure.Models;
 using TradingScanner.Domain.Notifications;
 using TradingScanner.Domain.Models;
 using TradingScanner.Domain.SwingDetection;
-using TradingScanner.Infrastructure.Bybit;
 using TradingScanner.Infrastructure.Services;
 
-const string symbol = "EVAAUSDT";
+var configuration = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+    .AddEnvironmentVariables()
+    .Build();
+
+var services = new ServiceCollection();
+
+// Register market data provider based on configuration.
+// Supported values: "Bybit" or "GateIo".
+services.AddMarketDataProviderFromConfiguration(configuration);
+
+// Register shared services.
+services.AddSingleton(TimeProvider.System);
+services.AddTransient<CandleValidator>();
+services.AddTransient<HistoricalCandleLoader>();
+
+using var serviceProvider = services.BuildServiceProvider();
+
+var provider = serviceProvider.GetRequiredService<IMarketDataProvider>();
+var providerName = provider.ProviderName;
+
+var symbol = configuration["MarketData:Symbol"] ?? "EVAAUSDT";
 
 Console.WriteLine("================================================");
 Console.WriteLine("       BTCUSDT HISTORICAL CANDLE LOADER");
 Console.WriteLine("================================================");
 
-using var httpClient = new HttpClient
-{
-    BaseAddress = new Uri("https://api.bybit.com/"),
-    Timeout = TimeSpan.FromSeconds(30)
-};
 
-httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
-    "TradingScannerMVP/1.0"
-);
 
-// Create application services.
-
-var bybitClient = new BybitRestClient(httpClient);
-
-var validator = new CandleValidator();
-
-var timeProvider = TimeProvider.System;
-
-var historicalLoader = new HistoricalCandleLoader(
-    bybitClient,
-    validator,
-    timeProvider
-);
+var validator = serviceProvider.GetRequiredService<CandleValidator>();
+var timeProvider = serviceProvider.GetRequiredService<TimeProvider>();
+var historicalLoader = serviceProvider.GetRequiredService<HistoricalCandleLoader>();
 
 try
 {
     Console.WriteLine();
-    Console.WriteLine("Symbol: BTCUSDT");
-    Console.WriteLine("Exchange: Bybit");
-    Console.WriteLine("Category: Linear");
+    Console.WriteLine($"Symbol: {symbol}");
+    Console.WriteLine($"Provider: {providerName}");
     Console.WriteLine("Timeframe: 4H");
     Console.WriteLine("Analysis window: 14 days");
     Console.WriteLine("Expected candles: 84");
@@ -194,11 +198,6 @@ try
     // 6. PROCESS ALERT (Telegram + deduplication)
     // --------------------------------------------------
 
-    var configuration = new ConfigurationBuilder()
-        .SetBasePath(AppContext.BaseDirectory)
-        .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
-        .Build();
-
     var botToken = configuration["Telegram:BotToken"]
         ?? Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN");
 
@@ -237,7 +236,9 @@ try
             telegramService,
             deduplicationService);
 
-        await alertCoordinator.ProcessAsync(trend);
+        await alertCoordinator.ProcessAsync(
+            trend,
+            providerName);
     }
 
     Console.WriteLine();
@@ -246,7 +247,7 @@ try
 }
 catch (HttpRequestException ex)
 {
-    Console.WriteLine("Bybit HTTP request failed.");
+    Console.WriteLine("Market data HTTP request failed.");
     Console.WriteLine(ex.Message);
 }
 catch (TaskCanceledException ex)
@@ -260,3 +261,10 @@ catch (Exception ex)
     Console.WriteLine("HISTORICAL DATA LOADING FAILED");
     Console.WriteLine(ex);
 }
+
+
+
+
+
+
+
