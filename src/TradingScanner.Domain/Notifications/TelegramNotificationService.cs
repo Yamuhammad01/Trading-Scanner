@@ -2,6 +2,8 @@ using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using TradingScanner.Domain.MarketStructure.Models;
 using TradingScanner.Domain.SwingDetection.Models;
+using RollingSlopeTrendDirection = TradingScanner.Domain.TrendDetection.RollingSlope.Models.TrendDirection;
+using RollingSlopeTrendResult = TradingScanner.Domain.TrendDetection.RollingSlope.Models.TrendResult;
 
 namespace TradingScanner.Domain.Notifications;
 
@@ -53,6 +55,69 @@ public sealed class TelegramNotificationService
             throw new InvalidOperationException(
                 "Telegram rejected the notification.");
         }
+    }
+
+    public async Task SendTrendAlertAsync(
+        RollingSlopeTrendResult trend,
+        CancellationToken cancellationToken = default)
+    {
+        if (trend.Direction == RollingSlopeTrendDirection.Neutral)
+            return;
+
+        var message = BuildRollingSlopeMessage(trend);
+
+        var request = new TelegramMessageRequest
+        {
+            ChatId = _options.ChatId,
+            Text = message
+        };
+
+        var url =
+            $"https://api.telegram.org/bot{_options.BotToken}/sendMessage";
+
+        using var response = await _httpClient.PostAsJsonAsync(
+            url,
+            request,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content
+            .ReadFromJsonAsync<TelegramApiResponse>(
+                cancellationToken: cancellationToken);
+
+        if (result?.Ok != true)
+        {
+            throw new InvalidOperationException(
+                "Telegram rejected the notification.");
+        }
+    }
+
+    private static string BuildRollingSlopeMessage(RollingSlopeTrendResult trend)
+    {
+        var bullish = trend.Direction == RollingSlopeTrendDirection.Bullish;
+        var title = bullish
+            ? "🟢 BULLISH TREND DETECTED (Rolling Slope)"
+            : "🔴 BEARISH TREND DETECTED (Rolling Slope)";
+
+        return $"""
+        {title}
+
+        Symbol: {trend.Symbol}
+        Exchange: {trend.Provider}
+        Timeframe: {trend.Timeframe}
+        Condition: {trend.Condition}
+
+        Upper Norm Slope: {trend.UpperNormalizedSlope:N4} ATR/candle
+        Lower Norm Slope: {trend.LowerNormalizedSlope:N4} ATR/candle
+        Upper Boundary: {trend.UpperBoundaryPrice:N2}
+        Lower Boundary: {trend.LowerBoundaryPrice:N2}
+        ATR(14): {trend.Atr:N2}
+        Retests: {trend.BoundaryRetestCount}
+
+        Trend: {trend.Direction.ToString().ToUpperInvariant()}
+        Established: {trend.EstablishedAt:yyyy-MM-dd HH:mm} UTC
+        """;
     }
 
     private static string BuildMessage(TrendResult trend, string dataProviderName)

@@ -1,0 +1,7 @@
+{
+  "_comment": "DEVELOPMENT EXAMPLE ONLY. Supply calibrated values via environment variables (RollingSlope__MinimumSlopeAtrPerCandle, RollingSlope__UpperBreakoutThresholdAtr) or in appsettings.json under 'RollingSlope'.",
+  "RollingSlope": {
+    "MinimumSlopeAtrPerCandle": 0.02,
+    "UpperBreakoutThresholdAtr": 1.0
+  }
+}

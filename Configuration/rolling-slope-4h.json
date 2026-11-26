@@ -1,0 +1,142 @@
+{
+  "schema_version": "1.0.0",
+  "name": "rolling_slope_trend_detector",
+  "description": "Determines market direction using rolling linear regression boundaries calculated directly from closed candle highs and lows.",
+  "enabled": true,
+  "timeframe": "4H",
+
+  "candle_requirements": {
+    "closed_candles_only": true,
+    "order": "oldest_first",
+    "lookback_candles": 84,
+    "recalculate_after_each_closed_candle": true,
+    "evaluate_new_candle_against_previous_window": true
+  },
+
+  "regression": {
+    "method": "linear_regression",
+    "price_transform": "none",
+    "upper_boundary_source": "high",
+    "lower_boundary_source": "low",
+    "minimum_valid_window": 84,
+    "project_boundary_to_evaluation_candle": true
+  },
+
+  "atr": {
+    "period": 14,
+    "method": "wilder",
+    "normalization": "regression_slope_divided_by_atr",
+    "reference": "previous_closed_candle"
+  },
+
+  "direction_rules": {
+    "minimum_slope_atr_per_candle": null,
+    "bearish": {
+      "upper_slope": "less_than_negative_minimum",
+      "lower_slope": "less_than_negative_minimum",
+      "required": true
+    },
+    "bullish": {
+      "upper_slope": "greater_than_minimum",
+      "lower_slope": "greater_than_minimum",
+      "required": true
+    },
+    "otherwise": "neutral"
+  },
+
+  "boundary_interactions": {
+    "touch_tolerance_atr": 0.3,
+    "closed_candle_required": true,
+
+    "bearish": {
+      "lower_boundary_retest": {
+        "price_reference": "candle_low",
+        "within_tolerance": true,
+        "rejection_confirmation": "candle_close_above_lower_boundary"
+      },
+      "lower_boundary_break": {
+        "condition": "candle_close_below_lower_boundary",
+        "action": "mark_bearish_acceleration",
+        "invalidates_bearish_trend": false
+      },
+      "upper_boundary_break": {
+        "condition": "candle_close_above_upper_boundary",
+        "minimum_distance_atr": null,
+        "action": "invalidate_bearish_trend"
+      }
+    },
+
+    "bullish": {
+      "upper_boundary_retest": {
+        "price_reference": "candle_high",
+        "within_tolerance": true,
+        "rejection_confirmation": "candle_close_below_upper_boundary"
+      },
+      "upper_boundary_break": {
+        "condition": "candle_close_above_upper_boundary",
+        "action": "mark_bullish_acceleration",
+        "invalidates_bullish_trend": false
+      },
+      "lower_boundary_break": {
+        "condition": "candle_close_below_lower_boundary",
+        "minimum_distance_atr": null,
+        "action": "invalidate_bullish_trend"
+      }
+    }
+  },
+
+  "trend_maturity": {
+    "enabled": true,
+    "minimum_duration_days": 3,
+    "minimum_confirmed_boundary_retests": 1,
+    "bearish": {
+      "retest_boundary": "lower"
+    },
+    "bullish": {
+      "retest_boundary": "upper"
+    },
+    "requirements": [
+      "valid_directional_channel",
+      "minimum_duration_reached",
+      "minimum_boundary_retests_reached",
+      "no_significant_opposite_boundary_breakout"
+    ]
+  },
+
+  "trend_lifecycle": {
+    "establish_when": "both_regression_boundaries_have_valid_directional_slopes",
+    "preserve_establishment_time_during_rolling_recalculation": true,
+    "preserve_retest_history_during_rolling_recalculation": true,
+    "reset_when": [
+      "significant_opposite_boundary_breakout",
+      "both_boundaries_no_longer_support_current_direction"
+    ],
+    "lower_boundary_break_invalidates_bearish_trend": false,
+    "upper_boundary_break_invalidates_bullish_trend": false,
+    "reversal_requires_new_opposite_directional_channel": true
+  },
+
+  "evaluation_priority": [
+    "significant_opposite_boundary_breakout",
+    "directional_channel_validity",
+    "directional_acceleration",
+    "boundary_retest",
+    "trend_maturity"
+  ],
+
+  "output": {
+    "direction": [
+      "bullish",
+      "bearish",
+      "neutral"
+    ],
+    "condition": [
+      "developing",
+      "established",
+      "mature",
+      "accelerating",
+      "potential_reversal",
+      "no_valid_trend"
+    ]
+  }
+}

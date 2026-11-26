@@ -2,12 +2,13 @@ using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradingScanner.Domain.MarketData;
-using TradingScanner.Domain.MarketStructure;
-using TradingScanner.Domain.MarketStructure.Models;
 using TradingScanner.Domain.Notifications;
 using TradingScanner.Domain.Models;
 using TradingScanner.Domain.SwingDetection;
+using TradingScanner.Domain.TrendDetection.Abstractions;
+using TradingScanner.Domain.TrendDetection.RollingSlope.Models;
 using TradingScanner.Infrastructure.Services;
+using TradingScanner.Infrastructure.TrendDetection;
 
 var configuration = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
@@ -17,6 +18,8 @@ var configuration = new ConfigurationBuilder()
 
 var services = new ServiceCollection();
 
+services.AddLogging();
+
 // Register market data provider based on configuration.
 // Supported values: "Bybit" or "GateIo".
 services.AddMarketDataProviderFromConfiguration(configuration);
@@ -25,6 +28,9 @@ services.AddMarketDataProviderFromConfiguration(configuration);
 services.AddSingleton(TimeProvider.System);
 services.AddTransient<CandleValidator>();
 services.AddTransient<HistoricalCandleLoader>();
+
+// Register rolling slope trend detection (loads and validates Configuration/rolling-slope-4h.json).
+services.AddRollingSlopeTrendDetection(configuration);
 
 using var serviceProvider = services.BuildServiceProvider();
 
@@ -176,55 +182,61 @@ try
     }
 
     // --------------------------------------------------
-    // 4. DETECT MARKET STRUCTURE
+    // 4. ROLLING SLOPE TREND DETECTION (REPLAY & LATEST)
     // --------------------------------------------------
 
-    var marketStructureDetector = new MarketStructureDetector();
+    var trendDetector = serviceProvider.GetRequiredService<ITrendDetector>();
 
-    var structurePoints = marketStructureDetector.Detect(
-        swingResult.SwingPoints);
+    var replayResults = await trendDetector.ReplayAsync(
+        providerName,
+        symbol,
+        history.Timeframe,
+        history.Candles);
 
     Console.WriteLine();
     Console.WriteLine("================================================================");
-    Console.WriteLine("                      MARKET STRUCTURE");
+    Console.WriteLine("              ROLLING SLOPE REPLAY DIAGNOSTICS");
     Console.WriteLine("================================================================");
 
-    foreach (var point in structurePoints)
+    foreach (var r in replayResults.Where(x => x.UpperBoundaryPrice.HasValue))
     {
+        var ageStr = r.TrendAge.HasValue ? $"{r.TrendAge.Value.TotalDays:F1}d" : "-";
+        var brkStr = r.BreakoutDistanceAtr.HasValue ? $"{r.BreakoutDistanceAtr.Value:F2}" : "-";
         Console.WriteLine(
-            $"{point.Type,-10} | " +
-            $"{point.Label,-8} | " +
-            $"{point.Price,-12} | " +
-            $"{point.OccurredAt:yyyy-MM-dd HH:mm}");
+            $"{r.LastProcessedCandleTime:yyyy-MM-dd HH:mm} | " +
+            $"U:{r.UpperBoundaryPrice,9:N2} L:{r.LowerBoundaryPrice,9:N2} | " +
+            $"US:{r.UpperNormalizedSlope,6:F3} LS:{r.LowerNormalizedSlope,6:F3} | " +
+            $"{r.Direction,-7} | {r.Condition,-17} | " +
+            $"Ret:{r.BoundaryRetestCount} | Age:{ageStr,-5} | Brk:{brkStr}");
     }
 
-    // --------------------------------------------------
-    // 5. CLASSIFY TREND
-    // --------------------------------------------------
-
-    var trendClassifier = new TrendClassifier();
-
-    var trend = trendClassifier.Classify(structurePoints);
+    var trend = replayResults[^1];
 
     Console.WriteLine();
     Console.WriteLine("================================================================");
-    Console.WriteLine("                      TREND CLASSIFICATION");
+    Console.WriteLine("             ROLLING SLOPE TREND CLASSIFICATION");
     Console.WriteLine("================================================================");
 
+    Console.WriteLine($"Provider: {trend.Provider}");
     Console.WriteLine($"Symbol: {trend.Symbol}");
     Console.WriteLine($"Timeframe: {trend.Timeframe}");
     Console.WriteLine($"Direction: {trend.Direction}");
-    Console.WriteLine($"HH transitions: {trend.HigherHighTransitions}");
-    Console.WriteLine($"HL transitions: {trend.HigherLowTransitions}");
-    Console.WriteLine($"LH transitions: {trend.LowerHighTransitions}");
-    Console.WriteLine($"LL transitions: {trend.LowerLowTransitions}");
+    Console.WriteLine($"Condition: {trend.Condition}");
+    Console.WriteLine($"Upper Slope: {(trend.UpperSlope.HasValue ? trend.UpperSlope.Value.ToString("N4", CultureInfo.InvariantCulture) : "N/A")}");
+    Console.WriteLine($"Lower Slope: {(trend.LowerSlope.HasValue ? trend.LowerSlope.Value.ToString("N4", CultureInfo.InvariantCulture) : "N/A")}");
+    Console.WriteLine($"Upper Norm Slope: {(trend.UpperNormalizedSlope.HasValue ? trend.UpperNormalizedSlope.Value.ToString("N4", CultureInfo.InvariantCulture) : "N/A")}");
+    Console.WriteLine($"Lower Norm Slope: {(trend.LowerNormalizedSlope.HasValue ? trend.LowerNormalizedSlope.Value.ToString("N4", CultureInfo.InvariantCulture) : "N/A")}");
+    Console.WriteLine($"Upper Boundary: {(trend.UpperBoundaryPrice.HasValue ? trend.UpperBoundaryPrice.Value.ToString("N2", CultureInfo.InvariantCulture) : "N/A")}");
+    Console.WriteLine($"Lower Boundary: {(trend.LowerBoundaryPrice.HasValue ? trend.LowerBoundaryPrice.Value.ToString("N2", CultureInfo.InvariantCulture) : "N/A")}");
+    Console.WriteLine($"ATR(14): {(trend.Atr.HasValue ? trend.Atr.Value.ToString("N4", CultureInfo.InvariantCulture) : "N/A")}");
+    Console.WriteLine($"Retest count: {trend.BoundaryRetestCount}");
     Console.WriteLine(
         trend.EstablishedAt is { } established
             ? $"Established at: {established:yyyy-MM-dd HH:mm} UTC"
             : "Established at: N/A");
 
     // --------------------------------------------------
-    // 6. PROCESS ALERT (Telegram + deduplication)
+    // 5. PROCESS ALERT (Telegram + deduplication)
     // --------------------------------------------------
 
     var botToken = configuration["Telegram:BotToken"]
@@ -265,9 +277,7 @@ try
             telegramService,
             deduplicationService);
 
-        await alertCoordinator.ProcessAsync(
-            trend,
-            providerName);
+        await alertCoordinator.ProcessAsync(trend);
     }
 
     Console.WriteLine();

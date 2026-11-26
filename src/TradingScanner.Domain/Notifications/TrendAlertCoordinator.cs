@@ -1,4 +1,6 @@
 using TradingScanner.Domain.MarketStructure.Models;
+using RollingSlopeTrendDirection = TradingScanner.Domain.TrendDetection.RollingSlope.Models.TrendDirection;
+using RollingSlopeTrendResult = TradingScanner.Domain.TrendDetection.RollingSlope.Models.TrendResult;
 
 namespace TradingScanner.Domain.Notifications;
 
@@ -50,5 +52,40 @@ public sealed class TrendAlertCoordinator
         Console.WriteLine(
             $"Telegram alert sent: {trend.Symbol} " +
             $"{trend.Direction}");
+    }
+
+    public async Task ProcessAsync(
+        RollingSlopeTrendResult trend,
+        CancellationToken cancellationToken = default)
+    {
+        if (trend.Direction == RollingSlopeTrendDirection.Neutral)
+            return;
+
+        var eventKey = TrendEventKeyBuilder.Build(trend);
+
+        var alreadySent = await _deduplication.HasBeenSentAsync(
+            eventKey,
+            cancellationToken);
+
+        if (alreadySent)
+        {
+            Console.WriteLine(
+                $"Duplicate alert skipped: {trend.Symbol} " +
+                $"{trend.Direction} ({trend.Condition})");
+
+            return;
+        }
+
+        await _telegram.SendTrendAlertAsync(
+            trend,
+            cancellationToken);
+
+        await _deduplication.MarkAsSentAsync(
+            eventKey,
+            cancellationToken);
+
+        Console.WriteLine(
+            $"Telegram alert sent: {trend.Symbol} " +
+            $"{trend.Direction} ({trend.Condition})");
     }
 }
