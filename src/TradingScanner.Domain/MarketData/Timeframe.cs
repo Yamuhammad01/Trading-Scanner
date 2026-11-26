@@ -18,6 +18,23 @@ public sealed class Timeframe
     public static Timeframe OneHour { get; } = new("1h", TimeSpan.FromHours(1));
     public static Timeframe FourHours { get; } = new("4h", TimeSpan.FromHours(4));
 
+    public static Timeframe Parse(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Timeframe cannot be null or empty.", nameof(value));
+        }
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "5m" => FiveMinutes,
+            "1h" or "1hr" => OneHour,
+            "4h" or "4hr" => FourHours,
+            _ => throw new NotSupportedException(
+                $"Unsupported timeframe '{value}'. Supported timeframes: 5m, 1h, 4h.")
+        };
+    }
+
     public override string ToString() => Name;
 
     public static bool operator ==(Timeframe? left, Timeframe? right)

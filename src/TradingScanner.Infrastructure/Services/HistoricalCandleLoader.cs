@@ -1,4 +1,4 @@
-﻿using TradingScanner.Domain.Entities;
+using TradingScanner.Domain.Entities;
 using TradingScanner.Domain.MarketData;
 using TradingScanner.Domain.Models;
 
@@ -8,63 +8,103 @@ public sealed class HistoricalCandleLoader
 {
     private readonly IMarketDataProvider _marketDataProvider;
     private readonly CandleValidator _validator;
+    private readonly TimeProvider _timeProvider;
 
-    private static readonly TimeSpan CandleInterval =
-        TimeSpan.FromHours(4);
-
-    private const int DefaultCandleCount = 84;
+    private static readonly TimeSpan DefaultWindow = TimeSpan.FromDays(14);
+    private const int MaxCandlesPerRequest = 200;
 
     public HistoricalCandleLoader(
         IMarketDataProvider marketDataProvider,
-        CandleValidator validator)
+        CandleValidator validator,
+        TimeProvider? timeProvider = null)
     {
         _marketDataProvider = marketDataProvider;
         _validator = validator;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task<CandleHistory> LoadLatestAsync(
+    public Task<CandleHistory> LoadLatestAsync(
         string symbol,
+        Timeframe? timeframe = null,
         CancellationToken cancellationToken = default)
     {
-        var now = TimeProvider.System.GetUtcNow();
+        var tf = timeframe ?? Timeframe.FourHours;
+        var now = _timeProvider.GetUtcNow();
+        var latestClosedTime = GetLatestClosedCandleStart(now, tf.Interval);
+        var defaultCandleCount = (int)(DefaultWindow.Ticks / tf.Interval.Ticks);
+        var oldestTime = latestClosedTime -
+            TimeSpan.FromTicks(tf.Interval.Ticks * (defaultCandleCount - 1));
 
-        var intervalMilliseconds =
-            (long)CandleInterval.TotalMilliseconds;
+        return LoadRangeAsync(symbol, tf, oldestTime, latestClosedTime, cancellationToken);
+    }
 
-        var currentCandleStartMilliseconds =
-            (now.ToUnixTimeMilliseconds() / intervalMilliseconds)
-            * intervalMilliseconds;
+    public async Task<CandleHistory> LoadRangeAsync(
+        string symbol,
+        Timeframe timeframe,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        ArgumentNullException.ThrowIfNull(timeframe);
 
-        var currentCandleStart =
-            DateTimeOffset.FromUnixTimeMilliseconds(
-                currentCandleStartMilliseconds);
+        var now = _timeProvider.GetUtcNow();
+        var interval = timeframe.Interval;
+        var latestClosedTime = GetLatestClosedCandleStart(now, interval);
 
-        var latestClosedTime =
-            currentCandleStart - CandleInterval;
+        var oldestTime = AlignToIntervalStart(startTime, interval);
+        var latestTime = AlignToIntervalStart(endTime, interval);
 
-        var oldestTime =
-            latestClosedTime -
-            TimeSpan.FromTicks(
-                CandleInterval.Ticks * (DefaultCandleCount - 1));
+        if (latestTime > latestClosedTime)
+        {
+            latestTime = latestClosedTime;
+        }
+
+        if (oldestTime > latestTime)
+        {
+            throw new InvalidOperationException(
+                $"Invalid historical range: start time ({oldestTime:O}) is after end time ({latestTime:O}).");
+        }
+
+        var expectedCount = (int)((latestTime - oldestTime).Ticks / interval.Ticks) + 1;
 
         Console.WriteLine($"Current UTC time: {now:O}");
         Console.WriteLine($"Oldest required:  {oldestTime:O}");
-        Console.WriteLine($"Latest required:  {latestClosedTime:O}");
+        Console.WriteLine($"Latest required:  {latestTime:O}");
+        Console.WriteLine($"Expected candles: {expectedCount}");
 
-        var request = MarketDataRequest.ForHistoricalWindow(
-            symbol,
-            oldestTime,
-            latestClosedTime);
+        var allCandles = new List<Candle>(expectedCount);
+        var chunkSpan = TimeSpan.FromTicks(interval.Ticks * (MaxCandlesPerRequest - 1));
 
-        var candles = await _marketDataProvider.GetCandlesAsync(
-            request,
-            cancellationToken);
+        for (var chunkStart = oldestTime;
+             chunkStart <= latestTime;
+             chunkStart = chunkStart.Add(TimeSpan.FromTicks(interval.Ticks * MaxCandlesPerRequest)))
+        {
+            var chunkEnd = chunkStart.Add(chunkSpan);
+            if (chunkEnd > latestTime)
+            {
+                chunkEnd = latestTime;
+            }
 
-        var normalizedCandles = candles
+            var request = MarketDataRequest.ForHistoricalWindow(
+                symbol,
+                timeframe,
+                chunkStart,
+                chunkEnd,
+                MaxCandlesPerRequest);
+
+            var chunkCandles = await _marketDataProvider.GetCandlesAsync(
+                request,
+                cancellationToken);
+
+            allCandles.AddRange(chunkCandles);
+        }
+
+        var normalizedCandles = allCandles
             .Where(c =>
                 c.StartTime >= oldestTime &&
-                c.StartTime <= latestClosedTime &&
-                c.StartTime.Add(CandleInterval) <= now)
+                c.StartTime <= latestTime &&
+                c.StartTime.Add(interval) <= now)
             .ToList();
 
         var uniqueCandles =
@@ -81,13 +121,14 @@ public sealed class HistoricalCandleLoader
                     $"Unexpected symbol: {candle.Symbol}");
             }
 
-            _validator.ValidateCandle(candle);
+            _validator.ValidateCandle(candle, interval);
         }
 
         var missingCandles = _validator.FindMissingCandles(
             uniqueCandles,
             oldestTime,
-            latestClosedTime);
+            latestTime,
+            interval);
 
         foreach (var missingTime in missingCandles)
         {
@@ -95,12 +136,14 @@ public sealed class HistoricalCandleLoader
                 $"Recovering missing candle: {missingTime:O}");
 
             var recoveryStart = missingTime;
-            var recoveryEnd = missingTime.Add(CandleInterval);
+            var recoveryEnd = missingTime.Add(interval);
 
             var recoveryRequest = MarketDataRequest.ForHistoricalWindow(
                 symbol,
+                timeframe,
                 recoveryStart,
-                recoveryEnd);
+                recoveryEnd,
+                limit: 1);
 
             var recovered = await _marketDataProvider.GetCandlesAsync(
                 recoveryRequest,
@@ -112,7 +155,7 @@ public sealed class HistoricalCandleLoader
 
             foreach (var recoveredCandle in matchingCandles)
             {
-                _validator.ValidateCandle(recoveredCandle);
+                _validator.ValidateCandle(recoveredCandle, interval);
             }
 
             uniqueCandles = _validator.RemoveDuplicates(
@@ -122,7 +165,8 @@ public sealed class HistoricalCandleLoader
         missingCandles = _validator.FindMissingCandles(
             uniqueCandles,
             oldestTime,
-            latestClosedTime);
+            latestTime,
+            interval);
 
         if (missingCandles.Count > 0)
         {
@@ -138,17 +182,34 @@ public sealed class HistoricalCandleLoader
         _validator.ValidateContinuity(
             uniqueCandles,
             oldestTime,
-            latestClosedTime,
-            DefaultCandleCount);
+            latestTime,
+            expectedCount,
+            interval);
 
         Console.WriteLine("Historical candle validation successful.");
 
         return new CandleHistory(
             Symbol: symbol,
-            Timeframe: "4H",
+            Timeframe: timeframe.Name.ToUpperInvariant(),
             LoadedAt: now,
             OldestCandleTime: oldestTime,
-            LatestCandleTime: latestClosedTime,
+            LatestCandleTime: latestTime,
             Candles: uniqueCandles);
+    }
+
+    private static DateTimeOffset AlignToIntervalStart(
+        DateTimeOffset timestamp,
+        TimeSpan interval)
+    {
+        var intervalMs = (long)interval.TotalMilliseconds;
+        var alignedMs = (timestamp.ToUnixTimeMilliseconds() / intervalMs) * intervalMs;
+        return DateTimeOffset.FromUnixTimeMilliseconds(alignedMs);
+    }
+
+    private static DateTimeOffset GetLatestClosedCandleStart(
+        DateTimeOffset now,
+        TimeSpan interval)
+    {
+        return AlignToIntervalStart(now, interval) - interval;
     }
 }

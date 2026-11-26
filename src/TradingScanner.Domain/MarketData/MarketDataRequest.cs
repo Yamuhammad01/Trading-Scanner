@@ -21,13 +21,26 @@ public sealed class MarketDataRequest
         DateTimeOffset startTime,
         DateTimeOffset endTime)
     {
+        return ForHistoricalWindow(symbol, Timeframe.FourHours, startTime, endTime);
+    }
+
+    public static MarketDataRequest ForHistoricalWindow(
+        string symbol,
+        Timeframe timeframe,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        int? limit = null)
+    {
+        ArgumentNullException.ThrowIfNull(timeframe);
+
         return new MarketDataRequest
         {
             Symbol = symbol,
             MarketType = MarketType.USDTPerpetual,
-            Timeframe = Timeframe.FourHours,
+            Timeframe = timeframe,
             StartTime = startTime,
             EndTime = endTime,
+            Limit = limit,
         };
     }
 

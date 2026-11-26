@@ -4,11 +4,8 @@ namespace TradingScanner.Infrastructure.Services;
 
 public sealed class CandleValidator
 {
-    private static readonly TimeSpan CandleInterval =
+    private static readonly TimeSpan DefaultCandleInterval =
         TimeSpan.FromHours(4);
-
-    private static readonly long IntervalMilliseconds =
-        (long)CandleInterval.TotalMilliseconds;
 
     public IReadOnlyList<Candle> RemoveDuplicates(
         IEnumerable<Candle> candles)
@@ -40,16 +37,20 @@ public sealed class CandleValidator
             .ToList();
     }
 
-    public void ValidateCandle(Candle candle)
+    public void ValidateCandle(Candle candle) =>
+        ValidateCandle(candle, DefaultCandleInterval);
+
+    public void ValidateCandle(Candle candle, TimeSpan candleInterval)
     {
+        var intervalMilliseconds = (long)candleInterval.TotalMilliseconds;
         var timestamp = candle.StartTime.ToUnixTimeMilliseconds();
 
-        // Check that candle starts on a valid 4H UTC boundary.
+        // Check that candle starts on a valid UTC boundary for the timeframe.
 
-        if (timestamp % IntervalMilliseconds != 0)
+        if (timestamp % intervalMilliseconds != 0)
         {
             throw new InvalidOperationException(
-                $"Invalid 4H candle timestamp: {candle.StartTime:O}");
+                $"Invalid {candleInterval} candle timestamp: {candle.StartTime:O}");
         }
 
         // Check price values.
@@ -99,7 +100,14 @@ public sealed class CandleValidator
     public List<DateTimeOffset> FindMissingCandles(
         IReadOnlyList<Candle> candles,
         DateTimeOffset oldestTime,
-        DateTimeOffset latestTime)
+        DateTimeOffset latestTime) =>
+        FindMissingCandles(candles, oldestTime, latestTime, DefaultCandleInterval);
+
+    public List<DateTimeOffset> FindMissingCandles(
+        IReadOnlyList<Candle> candles,
+        DateTimeOffset oldestTime,
+        DateTimeOffset latestTime,
+        TimeSpan candleInterval)
     {
         var existingTimestamps = candles
             .Select(c => c.StartTime.ToUnixTimeMilliseconds())
@@ -109,7 +117,7 @@ public sealed class CandleValidator
 
         for (var time = oldestTime;
              time <= latestTime;
-             time = time.Add(CandleInterval))
+             time = time.Add(candleInterval))
         {
             var timestamp = time.ToUnixTimeMilliseconds();
 
@@ -126,7 +134,15 @@ public sealed class CandleValidator
         IReadOnlyList<Candle> candles,
         DateTimeOffset oldestTime,
         DateTimeOffset latestTime,
-        int expectedCount)
+        int expectedCount) =>
+        ValidateContinuity(candles, oldestTime, latestTime, expectedCount, DefaultCandleInterval);
+
+    public void ValidateContinuity(
+        IReadOnlyList<Candle> candles,
+        DateTimeOffset oldestTime,
+        DateTimeOffset latestTime,
+        int expectedCount,
+        TimeSpan candleInterval)
     {
         if (candles.Count != expectedCount)
         {
@@ -150,7 +166,7 @@ public sealed class CandleValidator
         for (var i = 1; i < candles.Count; i++)
         {
             var expectedNextTime =
-                candles[i - 1].StartTime.Add(CandleInterval);
+                candles[i - 1].StartTime.Add(candleInterval);
 
             if (candles[i].StartTime != expectedNextTime)
             {

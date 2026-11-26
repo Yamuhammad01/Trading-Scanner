@@ -31,10 +31,19 @@ using var serviceProvider = services.BuildServiceProvider();
 var provider = serviceProvider.GetRequiredService<IMarketDataProvider>();
 var providerName = provider.ProviderName;
 
-var symbol = configuration["MarketData:Symbol"] ?? "EVAAUSDT";
+var symbol = configuration["MarketData:Symbol"] ?? "BTCUSDT";
+var timeframeConfig = configuration["MarketData:Timeframe"] ?? "4h";
+var timeframe = Timeframe.Parse(timeframeConfig);
+
+var startTime = ParseOptionalUtcTimestamp(
+    configuration["MarketData:StartTime"],
+    "MarketData:StartTime");
+var endTime = ParseOptionalUtcTimestamp(
+    configuration["MarketData:EndTime"],
+    "MarketData:EndTime");
 
 Console.WriteLine("================================================");
-Console.WriteLine("       BTCUSDT HISTORICAL CANDLE LOADER");
+Console.WriteLine($"       {symbol} HISTORICAL CANDLE LOADER");
 Console.WriteLine("================================================");
 
 
@@ -48,13 +57,34 @@ try
     Console.WriteLine();
     Console.WriteLine($"Symbol: {symbol}");
     Console.WriteLine($"Provider: {providerName}");
-    Console.WriteLine("Timeframe: 4H");
-    Console.WriteLine("Analysis window: 14 days");
-    Console.WriteLine("Expected candles: 84");
+    Console.WriteLine($"Timeframe: {timeframe.Name.ToUpperInvariant()}");
+    if (startTime.HasValue || endTime.HasValue)
+    {
+        Console.WriteLine($"Start time: {(startTime.HasValue ? startTime.Value.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) : "14 days before end")}");
+        Console.WriteLine($"End time:   {(endTime.HasValue ? endTime.Value.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) : "Latest closed candle")}");
+    }
+    else
+    {
+        Console.WriteLine("Analysis window: 14 days (default)");
+    }
 
     // Load and validate historical data.
 
-    var history = await historicalLoader.LoadLatestAsync(symbol);
+    CandleHistory history;
+    if (startTime.HasValue || endTime.HasValue)
+    {
+        var effectiveEnd = endTime ?? timeProvider.GetUtcNow();
+        var effectiveStart = startTime ?? effectiveEnd.AddDays(-14);
+        history = await historicalLoader.LoadRangeAsync(
+            symbol,
+            timeframe,
+            effectiveStart,
+            effectiveEnd);
+    }
+    else
+    {
+        history = await historicalLoader.LoadLatestAsync(symbol, timeframe);
+    }
 
     Console.WriteLine();
     Console.WriteLine("================================================");
@@ -101,7 +131,6 @@ try
     Console.WriteLine("             VALIDATION SUMMARY");
     Console.WriteLine("================================================");
 
-    Console.WriteLine($"Expected candles: {84}");
     Console.WriteLine($"Received candles: {history.Candles.Count}");
     Console.WriteLine("Duplicate candles: Removed/checked");
     Console.WriteLine("Missing candles: None");
@@ -116,8 +145,8 @@ try
 
     var options = new SwingPointDetectorOptions
     {
-        Timeframe = "4H",
-        CandleInterval = TimeSpan.FromHours(4),
+        Timeframe = history.Timeframe,
+        CandleInterval = timeframe.Interval,
         ConfirmationCandles = 2
     };
 
@@ -260,6 +289,26 @@ catch (Exception ex)
     Console.WriteLine();
     Console.WriteLine("HISTORICAL DATA LOADING FAILED");
     Console.WriteLine(ex);
+}
+
+static DateTimeOffset? ParseOptionalUtcTimestamp(string? value, string key)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return null;
+    }
+
+    if (!DateTimeOffset.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var parsed))
+    {
+        throw new InvalidOperationException(
+            $"Invalid '{key}' value '{value}'. Use an ISO 8601 date or timestamp (e.g. '2026-09-24' or '2026-09-24T00:00:00Z').");
+    }
+
+    return parsed;
 }
 
 
