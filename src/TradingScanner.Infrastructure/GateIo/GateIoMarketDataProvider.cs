@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using TradingScanner.Domain.Entities;
 using TradingScanner.Domain.MarketData;
+using TradingScanner.Domain.MarketScanning.Abstractions;
 
 namespace TradingScanner.Infrastructure.GateIo;
 
@@ -10,16 +11,19 @@ public sealed class GateIoMarketDataProvider : IMarketDataProvider
     private readonly HttpClient _httpClient;
     private readonly GateIoMarketDataProviderOptions _options;
     private readonly GateIoContractMetadataCache _contractCache;
+    private readonly ISymbolNormalizer _symbolNormalizer;
     private readonly JsonSerializerOptions _jsonOptions;
 
     public GateIoMarketDataProvider(
         HttpClient httpClient,
         GateIoMarketDataProviderOptions options,
-        GateIoContractMetadataCache contractMetadataCache)
+        GateIoContractMetadataCache contractMetadataCache,
+        ISymbolNormalizer? symbolNormalizer = null)
     {
         _httpClient = httpClient;
         _options = options;
         _contractCache = contractMetadataCache;
+        _symbolNormalizer = symbolNormalizer ?? new GateIoSymbolNormalizer();
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -42,7 +46,7 @@ public sealed class GateIoMarketDataProvider : IMarketDataProvider
                 $"Gate.io provider only supports {nameof(MarketType.USDTPerpetual)} market type.");
         }
 
-        var contract = MapSymbol(request.Symbol);
+        var contract = _symbolNormalizer.ToNativeSymbol(request.Symbol);
         var interval = MapInterval(request.Timeframe);
 
         long? fromSeconds = null;
