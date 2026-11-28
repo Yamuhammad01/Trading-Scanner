@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TradingScanner.Domain.MarketData;
 using TradingScanner.Domain.MarketScanning.Abstractions;
@@ -63,8 +63,18 @@ public sealed class MarketScannerHostedService : BackgroundService
             _universeManager.CurrentUniverse.Markets.Count);
 
         // 2. Fresh market discovery.
-        var diff = await _universeManager.RefreshAsync(stoppingToken);
-        LogUniverseDiff(diff);
+        MarketUniverseDiff diff;
+        try
+        {
+            diff = await _universeManager.RefreshAsync(stoppingToken);
+            LogUniverseDiff(diff);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Initial market discovery failed. Continuing with persisted universe of {Count} markets.",
+                _universeManager.CurrentUniverse.Markets.Count);
+            diff = new MarketUniverseDiff();
+        }
 
         // 3. Initialize all active markets (historical candle loading + trend replay).
         var activeMarkets = _universeManager.CurrentUniverse.ActiveMarkets;
@@ -307,3 +317,4 @@ public sealed class MarketScannerHostedService : BackgroundService
         }
     }
 }
+

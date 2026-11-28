@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradingScanner.Domain.MarketData;
@@ -26,7 +26,7 @@ public static class MarketDataServiceCollectionExtensions
         services.AddHttpClient<BybitMarketDataProvider>((sp, client) =>
         {
             client.BaseAddress = new Uri(options.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(30);
+            client.Timeout = TimeSpan.FromSeconds(100);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("TradingScannerMVP/1.0");
         });
 
@@ -51,7 +51,7 @@ public static class MarketDataServiceCollectionExtensions
         services.AddHttpClient<GateIoMarketDataProvider>((sp, client) =>
         {
             client.BaseAddress = new Uri(options.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(30);
+            client.Timeout = TimeSpan.FromSeconds(100);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("TradingScannerMVP/1.0");
         });
 
@@ -105,3 +105,4 @@ public static class MarketDataServiceCollectionExtensions
             $"Supported providers: {string.Join(", ", SupportedProviders)}.");
     }
 }
+

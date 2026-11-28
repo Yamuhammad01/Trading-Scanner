@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 
 namespace TradingScanner.Infrastructure.GateIo;
 
@@ -12,27 +12,61 @@ internal static class GateIoHttpRetryHelper
     {
         for (var attempt = 0; ; attempt++)
         {
-            var response = await sendAsync(cancellationToken);
-
-            if (response.IsSuccessStatusCode)
+            HttpResponseMessage? response = null;
+            try
             {
-                return response;
+                response = await sendAsync(cancellationToken);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return response;
+                }
+
+                var statusCode = (int)response.StatusCode;
+                var isTransient = response.StatusCode == HttpStatusCode.TooManyRequests ||
+                                  statusCode >= 500;
+
+                if (!isTransient || attempt >= MaxRetries)
+                {
+                    return response;
+                }
+
+                var delay = GetRetryDelay(response, attempt);
+                response.Dispose();
+                response = null;
+
+                await Task.Delay(delay, cancellationToken);
             }
-
-            var statusCode = (int)response.StatusCode;
-            var isTransient = response.StatusCode == HttpStatusCode.TooManyRequests ||
-                              statusCode >= 500;
-
-            if (!isTransient || attempt >= MaxRetries)
+            catch (Exception ex) when (IsTransientException(ex))
             {
-                return response;
+                response?.Dispose();
+
+                if (attempt >= MaxRetries)
+                {
+                    throw;
+                }
+
+                var delay = GetRetryBackoff(attempt);
+                await Task.Delay(delay, cancellationToken);
             }
-
-            var delay = GetRetryDelay(response, attempt);
-            response.Dispose();
-
-            await Task.Delay(delay, cancellationToken);
         }
+    }
+
+    private static bool IsTransientException(Exception ex)
+    {
+        return ex is HttpRequestException ||
+               ex is TaskCanceledException ||
+               ex is TimeoutException ||
+               ex.InnerException is HttpRequestException ||
+               ex.InnerException is TaskCanceledException ||
+               ex.InnerException is TimeoutException;
+    }
+
+    private static TimeSpan GetRetryBackoff(int attempt)
+    {
+        var backoffMs = 500 * Math.Pow(2, attempt);
+        var jitterMs = Random.Shared.Next(0, 250);
+        return TimeSpan.FromMilliseconds(backoffMs + jitterMs);
     }
 
     private static TimeSpan GetRetryDelay(HttpResponseMessage response, int attempt)
@@ -51,8 +85,6 @@ internal static class GateIoHttpRetryHelper
             }
         }
 
-        var backoffMs = 500 * Math.Pow(2, attempt);
-        var jitterMs = Random.Shared.Next(0, 250);
-        return TimeSpan.FromMilliseconds(backoffMs + jitterMs);
+        return GetRetryBackoff(attempt);
     }
 }

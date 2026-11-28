@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradingScanner.Domain.MarketScanning.Abstractions;
 using TradingScanner.Domain.MarketScanning.Configuration;
@@ -44,7 +44,7 @@ public static class MarketScanningServiceCollectionExtensions
         {
             var providerOptions = sp.GetRequiredService<GateIoMarketDataProviderOptions>();
             client.BaseAddress = new Uri(providerOptions.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(30);
+            client.Timeout = TimeSpan.FromSeconds(100);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("TradingScannerMVP/1.0");
         });
 
@@ -138,3 +138,4 @@ public static class MarketScanningServiceCollectionExtensions
         return services;
     }
 }
+
